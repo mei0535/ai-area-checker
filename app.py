@@ -54,7 +54,7 @@ with col_result:
         try:
             genai.configure(api_key=api_key)
             
-            # --- 關鍵修正：改用 gemini-pro-vision (這是最穩定的視覺模型名稱) ---
+            # --- 最終修正：使用 gemini-pro-vision (這是最穩定的視覺模型) ---
             model = genai.GenerativeModel('gemini-pro-vision')
             
             with st.spinner("AI 正在運算中..."):
