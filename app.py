@@ -4,7 +4,7 @@ from PIL import Image
 import pandas as pd
 import json
 
-# --- 1. Web Page Setup ---
+# --- 1. Page Config ---
 st.set_page_config(page_title="AI 全能工程算量平台", page_icon="🏗️", layout="wide")
 
 # --- 2. Sidebar ---
@@ -21,10 +21,8 @@ with st.sidebar:
     st.divider()
     
     st.header("🎨 自訂計算規則")
-    st.info("請定義圖面顏色與計算目標")
-    
     user_definition = st.text_area(
-        "1. 顏色與空間定義 (請自由描述)",
+        "1. 顏色與空間定義",
         value="例如：\n- 黃色線條範圍是「A戶辦公室」\n- 紅色線條範圍是「B戶會議室」",
         height=100
     )
@@ -36,10 +34,7 @@ with st.sidebar:
     
     wall_height = 0.0
     if "牆面" in calc_mode:
-        st.write("---")
-        st.markdown("#### 📏 設定樓高")
-        wall_height = st.number_input("請輸入樓層高度 (m)", value=3.0, step=0.1, format="%.2f")
-        st.caption(f"計算公式將為：周長 × {wall_height} m")
+        wall_height = st.number_input("輸入樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. Main Screen ---
 st.title("🏗️ AI 全能工程算量平台")
@@ -49,9 +44,7 @@ col_img, col_result = st.columns([1, 1.5])
 
 with col_img:
     st.subheader("1. 上傳圖說")
-    st.caption("支援 JPG / PNG 格式")
-    uploaded_file = st.file_uploader("請上傳已標示顏色的圖檔", type=["jpg", "jpeg", "png"])
-    
+    uploaded_file = st.file_uploader("支援 JPG / PNG", type=["jpg", "jpeg", "png"])
     if uploaded_file:
         image = Image.open(uploaded_file)
         st.image(image, caption="圖說預覽", use_column_width=True)
@@ -64,36 +57,28 @@ with col_result:
             try:
                 genai.configure(api_key=api_key)
                 
-                # --- FAIL-SAFE MODEL SELECTION LOGIC ---
+                # --- AUTO-DETECT MODEL LOGIC ---
                 target_model_name = ""
                 with st.spinner("正在搜尋可用模型..."):
                     try:
-                        # Get list of models
                         all_models = [m.name for m in genai.list_models()]
-                        
-                        # Priority list
-                        priorities = [
-                            'models/gemini-1.5-flash',
-                            'models/gemini-1.5-pro',
-                            'models/gemini-pro-vision'
-                        ]
-                        
-                        # Find the first matching model
-                        for p in priorities:
-                            if p in all_models:
-                                target_model_name = p
-                                break
-                        
-                        # Fallback if nothing found (very unlikely)
-                        if not target_model_name:
-                            target_model_name = 'models/gemini-1.5-flash'
+                        # Priority: Flash -> Pro Vision -> Pro
+                        if 'models/gemini-1.5-flash' in all_models:
+                            target_model_name = 'gemini-1.5-flash'
+                        elif 'models/gemini-pro-vision' in all_models:
+                            target_model_name = 'gemini-pro-vision'
+                        elif 'models/gemini-1.5-pro' in all_models:
+                            target_model_name = 'gemini-1.5-pro'
+                        else:
+                            # Fallback to the first available model
+                            target_model_name = all_models[0].replace('models/', '')
                             
-                        st.caption(f"✅ 使用模型：`{target_model_name}`")
+                        st.success(f"✅ 已連線至模型：`{target_model_name}`")
                         
-                    except Exception as list_error:
-                        # Fallback if list_models fails
+                    except Exception as e:
+                        # Hard fallback if listing fails
                         target_model_name = 'gemini-1.5-flash'
-                        st.caption(f"⚠️ 無法列出模型，嘗試強制使用：`{target_model_name}`")
+                        st.warning(f"⚠️ 無法自動搜尋，嘗試強制使用：`{target_model_name}`")
 
                 # Configure Model
                 model = genai.GenerativeModel(target_model_name)
@@ -115,61 +100,31 @@ with col_result:
 
                     prompt = f"""
                     你是一位專業的建築估算師。請依照以下規則分析這張圖說：
-
-                    【使用者定義 (顏色代表意義)】
-                    {user_definition}
-
-                    【計算目標與公式】
-                    {math_logic}
-
-                    【輸出格式要求】
-                    請務必輸出一個 JSON 格式的清單 (Array of Objects)，包含以下欄位：
-                    - "item_name": 項目名稱 (依據顏色定義)
-                    - "description": 計算邏輯說明 (例如：周長 x {wall_height})
-                    - "formula_str": 數值運算式 (例如：(10+5)*2 * {wall_height})
-                    - "result": 最終結果數字 (浮點數)
-                    - "unit": 單位 ({unit_hint})
-
-                    若圖面模糊無法辨識，請略過。請直接輸出 JSON，不要 Markdown 標記。
+                    【使用者定義】{user_definition}
+                    【計算目標】{math_logic}
+                    【輸出格式】請輸出 JSON 格式清單，包含：item_name, description, formula_str, result, unit。
+                    不要輸出 Markdown 標記。
                     """
                     
                     response = model.generate_content([prompt, image])
-                    
-                    # Parse JSON
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     
                     try:
                         data = json.loads(clean_json)
                         if data:
                             df = pd.DataFrame(data)
-                            
                             st.success("✅ 計算完成！")
-                            
                             if "result" in df.columns:
                                 try:
-                                    total_val = df['result'].sum()
-                                    st.metric("總數量 (Total)", f"{total_val:,.2f} {df['unit'].iloc[0]}")
+                                    st.metric("總數量 (Total)", f"{df['result'].sum():,.2f}")
                                 except: pass
-                            
-                            st.dataframe(
-                                df, 
-                                column_config={
-                                    "item_name": "項目/空間",
-                                    "description": "計算邏輯",
-                                    "formula_str": "算式過程",
-                                    "result": "小計",
-                                    "unit": "單位"
-                                },
-                                use_container_width=True
-                            )
-                            
+                            st.dataframe(df, use_container_width=True)
                             csv = df.to_csv(index=False).encode('utf-8-sig')
-                            st.download_button("📥 下載計算書 (CSV)", csv, "takeoff_report.csv", "text/csv")
+                            st.download_button("📥 下載計算書", csv, "takeoff.csv", "text/csv")
                         else:
-                            st.warning("AI 無法識別符合規則的物件，請檢查圖面顏色是否清晰。")
-                    except Exception as json_err:
-                        st.error("AI 回傳格式解析失敗，可能是圖面過於複雜。")
-                        st.caption("原始回傳內容：")
+                            st.warning("AI 無法識別符合規則的物件。")
+                    except:
+                        st.error("AI 回傳格式解析失敗。")
                         st.code(response.text)
 
             except Exception as e:
