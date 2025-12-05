@@ -4,107 +4,131 @@ from PIL import Image
 import pandas as pd
 import json
 
-# --- 1. 网页设定 ---
+# --- 1. 網頁設定 ---
 st.set_page_config(page_title="AI 全能工程算量平台", page_icon="🏗️", layout="wide")
 
-# --- 2. 侧边栏：设定与规则 ---
+# --- 2. 側邊欄 ---
 with st.sidebar:
-    st.header("🔑 系统设定")
+    st.header("🔑 系統設定")
     
-    # 尝试自动读取 API Key (如果以后有设定 Secrets 的话)
     try:
         default_key = st.secrets["GOOGLE_API_KEY"]
     except:
         default_key = ""
         
-    api_key = st.text_input("API Key", value=default_key, type="password", help="请输入 Google Gemini API Key")
+    api_key = st.text_input("API Key", value=default_key, type="password", help="請輸入 Google Gemini API Key")
     
     st.divider()
     
-    st.header("🎨 自订计算规则")
-    st.info("请定义图面颜色与计算目标")
+    st.header("🎨 自訂計算規則")
+    st.info("請定義圖面顏色與計算目標")
     
-    # [功能 1] 自订空间/线条定义
+    # [功能 1] 自訂空間/線條定義
     user_definition = st.text_area(
-        "1. 颜色与空间定义 (请自由描述)",
-        value="例如：\n- 黄色线条范围是「A户办公室」\n- 红色线条范围是「B户会议室」",
+        "1. 顏色與空間定義 (請自由描述)",
+        value="例如：\n- 黃色線條範圍是「A戶辦公室」\n- 紅色線條範圍是「B戶會議室」",
         height=100
     )
     
-    # [功能 2] 选择计算模式
+    # [功能 2] 選擇計算模式
     calc_mode = st.radio(
-        "2. 计算目标",
-        ["计算平面面积 (Area)", "计算周长 (Perimeter)", "计算墙面/表面积 (周长 x 高度)"]
+        "2. 計算目標",
+        ["計算平面面積 (Area)", "計算周長 (Perimeter)", "計算牆面/表面積 (周長 x 高度)"]
     )
     
-    # [功能 3] 如果选墙面，跳出高度输入框
+    # [功能 3] 若算牆面，需輸入高度
     wall_height = 0.0
-    if "墙面" in calc_mode:
+    if "牆面" in calc_mode:
         st.write("---")
-        st.markdown("#### 📏 设定楼高")
-        wall_height = st.number_input("请输入楼层高度 (m)", value=3.0, step=0.1, format="%.2f")
-        st.caption(f"计算公式将为：周长 × {wall_height} m")
+        st.markdown("#### 📏 設定樓高")
+        wall_height = st.number_input("請輸入樓層高度 (m)", value=3.0, step=0.1, format="%.2f")
+        st.caption(f"計算公式將為：周長 × {wall_height} m")
 
-# --- 3. 主画面 ---
+# --- 3. 主畫面 ---
 st.title("🏗️ AI 全能工程算量平台")
 st.markdown("---")
 
 col_img, col_result = st.columns([1, 1.5])
 
 with col_img:
-    st.subheader("1. 上传图说")
+    st.subheader("1. 上傳圖說")
     st.caption("支援 JPG / PNG 格式")
-    uploaded_file = st.file_uploader("请上传已标示颜色的图档", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("請上傳已標示顏色的圖檔", type=["jpg", "jpeg", "png"])
     
     if uploaded_file:
         image = Image.open(uploaded_file)
-        st.image(image, caption="图说预览", use_column_width=True)
+        st.image(image, caption="圖說預覽", use_column_width=True)
 
 with col_result:
-    st.subheader("2. AI 分析结果")
+    st.subheader("2. AI 分析結果")
     
     if uploaded_file and api_key:
-        if st.button("🚀 执行 AI 辨识与计算", type="primary"):
+        if st.button("🚀 執行 AI 辨識與計算", type="primary"):
             try:
                 genai.configure(api_key=api_key)
                 
-                # --- 这里设定为您帐号确定可用的模型 ---
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                with st.spinner("正在搜尋您帳號可用的最佳模型..."):
+                    # --- 自動導航：搜尋可用模型 ---
+                    target_model_name = ""
+                    try:
+                        # 取得所有可用模型
+                        all_models = [m.name for m in genai.list_models()]
+                        
+                        # 優先順序：Flash -> Pro Vision -> Pro
+                        if 'models/gemini-1.5-flash' in all_models:
+                            target_model_name = 'gemini-1.5-flash'
+                        elif 'models/gemini-pro-vision' in all_models:
+                            target_model_name = 'gemini-pro-vision'
+                        elif 'models/gemini-1.5-pro' in all_models:
+                            target_model_name = 'gemini-1.5-pro'
+                        else:
+                            # 如果都沒有，就抓列表裡的第一個
+                            target_model_name = all_models[0].replace('models/', '')
+                            
+                        st.caption(f"✅ 已自動連線至模型：`{target_model_name}`")
+                        
+                    except Exception as e:
+                        # 如果連搜尋都失敗，直接盲猜一個最舊的保底
+                        target_model_name = 'gemini-pro-vision'
+                        st.caption(f"⚠️ 搜尋模型失敗，嘗試使用預設模型：`{target_model_name}`")
+
+                # 設定模型
+                model = genai.GenerativeModel(target_model_name)
                 
-                with st.spinner("AI 正在读图并进行运算..."):
+                with st.spinner("AI 正在讀圖並進行運算..."):
                     
-                    # --- 动态生成指令 (核心逻辑) ---
                     math_logic = ""
                     unit_hint = ""
                     
-                    if "平面面积" in calc_mode:
-                        math_logic = "请辨识该范围的长宽标示，计算其「平面面积 (Area, m2)」。"
+                    if "平面面積" in calc_mode:
+                        math_logic = "請辨識該範圍的長寬標示，計算其「平面面積 (Area, m2)」。"
                         unit_hint = "m2"
-                    elif "周长" in calc_mode:
-                        math_logic = "请辨识该范围的边长标示，计算其「总周长 (Perimeter, m)」。"
+                    elif "周長" in calc_mode:
+                        math_logic = "請辨識該範圍的邊長標示，計算其「總周長 (Perimeter, m)」。"
                         unit_hint = "m"
-                    elif "墙面" in calc_mode:
-                        math_logic = f"请先计算该范围的「总周长」，然后将周长乘以高度 {wall_height} 公尺，得出「垂直墙表面积 (Wall Area, m2)」。"
+                    elif "牆面" in calc_mode:
+                        math_logic = f"請先計算該範圍的「總周長」，然後將周長乘以高度 {wall_height} 公尺，得出「垂直牆表面積 (Wall Area, m2)」。"
                         unit_hint = "m2"
 
+                    # 這裡的 Prompt 也全部改成繁體中文，確保 AI 回應也是繁體
                     prompt = f"""
-                    你是一位专业的建筑估算师。请依照以下规则分析这张图说：
+                    你是一位專業的建築估算師。請依照以下規則分析這張圖說：
 
-                    【使用者定义 (颜色代表意义)】
+                    【使用者定義 (顏色代表意義)】
                     {user_definition}
 
-                    【计算目标与公式】
+                    【計算目標與公式】
                     {math_logic}
 
-                    【输出格式要求】
-                    请务必输出一个 JSON 格式的清单 (Array of Objects)，包含以下栏位：
-                    - "item_name": 项目名称 (依据颜色定义)
-                    - "description": 计算逻辑说明 (例如：周长 x {wall_height})
-                    - "formula_str": 数值运算式 (例如：(10+5)*2 * {wall_height})
-                    - "result": 最终结果数字 (浮点数)
-                    - "unit": 单位 ({unit_hint})
+                    【輸出格式要求】
+                    請務必輸出一個 JSON 格式的清單 (Array of Objects)，包含以下欄位：
+                    - "item_name": 項目名稱 (依據顏色定義)
+                    - "description": 計算邏輯說明 (例如：周長 x {wall_height})
+                    - "formula_str": 數值運算式 (例如：(10+5)*2 * {wall_height})
+                    - "result": 最終結果數字 (浮點數)
+                    - "unit": 單位 ({unit_hint})
 
-                    若图面模糊无法辨识，请略过。请直接输出 JSON，不要 Markdown 标记。
+                    若圖面模糊無法辨識，請略過。請直接輸出 JSON，不要 Markdown 標記。
                     """
                     
                     response = model.generate_content([prompt, image])
@@ -117,43 +141,43 @@ with col_result:
                         if data:
                             df = pd.DataFrame(data)
                             
-                            st.success("✅ 计算完成！")
+                            st.success("✅ 計算完成！")
                             
-                            # 显示总计
+                            # 顯示總計
                             if "result" in df.columns:
                                 try:
                                     total_val = df['result'].sum()
-                                    st.metric("总数量 (Total)", f"{total_val:,.2f} {df['unit'].iloc[0]}")
+                                    st.metric("總數量 (Total)", f"{total_val:,.2f} {df['unit'].iloc[0]}")
                                 except: pass
                             
-                            # 显示详细表格
+                            # 顯示詳細表格
                             st.dataframe(
                                 df, 
                                 column_config={
-                                    "item_name": "项目/空间",
-                                    "description": "计算逻辑",
-                                    "formula_str": "算式过程",
-                                    "result": "小计",
-                                    "unit": "单位"
+                                    "item_name": "項目/空間",
+                                    "description": "計算邏輯",
+                                    "formula_str": "算式過程",
+                                    "result": "小計",
+                                    "unit": "單位"
                                 },
                                 use_container_width=True
                             )
                             
-                            # 下载按钮
+                            # 下載按鈕
                             csv = df.to_csv(index=False).encode('utf-8-sig')
-                            st.download_button("📥 下载计算书 (CSV)", csv, "takeoff_report.csv", "text/csv")
+                            st.download_button("📥 下載計算書 (CSV)", csv, "takeoff_report.csv", "text/csv")
                         else:
-                            st.warning("AI 无法识别符合规则的物件，请检查图面颜色是否清晰。")
+                            st.warning("AI 無法識別符合規則的物件，請檢查圖面顏色是否清晰。")
                     except Exception as json_err:
-                        st.error("AI 回传格式解析失败，可能是图面过于复杂。")
-                        st.caption("原始回传内容：")
+                        st.error("AI 回傳格式解析失敗，可能是圖面過於複雜。")
+                        st.caption("原始回傳內容：")
                         st.code(response.text)
 
             except Exception as e:
-                st.error(f"发生错误：{e}")
-                st.warning("请确认 API Key 是否正确，或尝试重新整理网页。")
+                st.error(f"發生錯誤：{e}")
+                st.warning("請確認 API Key 是否正確，或嘗試重新整理網頁。")
     
     elif not uploaded_file:
-        st.info("👈 请先上传图档")
+        st.info("👈 請先上傳圖檔")
     elif not api_key:
-        st.warning("👈 请输入 API Key")
+        st.warning("👈 請輸入 API Key")
