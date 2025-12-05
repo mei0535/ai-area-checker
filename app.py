@@ -54,8 +54,8 @@ with col_result:
         try:
             genai.configure(api_key=api_key)
             
-            # --- 關鍵修正：改用 gemini-1.5-flash (速度快且穩定支援免費版 API) ---
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # --- 關鍵修正：改用 gemini-pro-vision (這是最穩定的視覺模型名稱) ---
+            model = genai.GenerativeModel('gemini-pro-vision')
             
             with st.spinner("AI 正在運算中..."):
                 
@@ -92,7 +92,6 @@ with col_result:
                 # 解析 JSON
                 clean_json = response.text.replace("```json", "").replace("```", "").strip()
                 
-                # 有時候 AI 會回傳空字串或錯誤格式，多加一層防護
                 try:
                     data = json.loads(clean_json)
                     if data:
@@ -107,9 +106,10 @@ with col_result:
                     else:
                         st.warning("AI 無法識別符合規則的物件。")
                 except:
-                    st.error("AI 回傳格式異常，請再試一次。")
-                    st.write("原始回傳內容：", response.text)
+                    # 如果 gemini-pro-vision 回傳純文字，直接顯示出來
+                    st.info("AI 回傳了非表格內容：")
+                    st.write(response.text)
 
         except Exception as e:
             st.error(f"發生錯誤：{e}")
-            st.info("常見原因：API Key 權限不足或模型名稱錯誤。")
+            st.info("請確認 API Key 是否正確。")
