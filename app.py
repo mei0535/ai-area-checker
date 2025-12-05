@@ -4,10 +4,10 @@ from PIL import Image
 import pandas as pd
 import json
 
-# --- 1. Page Config ---
+# --- 1. 網頁設定 ---
 st.set_page_config(page_title="AI 全能工程算量平台", page_icon="🏗️", layout="wide")
 
-# --- 2. Sidebar ---
+# --- 2. 側邊欄 ---
 with st.sidebar:
     st.header("🔑 系統設定")
     
@@ -21,6 +21,7 @@ with st.sidebar:
     st.divider()
     
     st.header("🎨 自訂計算規則")
+    
     user_definition = st.text_area(
         "1. 顏色與空間定義",
         value="例如：\n- 黃色線條範圍是「A戶辦公室」\n- 紅色線條範圍是「B戶會議室」",
@@ -34,9 +35,12 @@ with st.sidebar:
     
     wall_height = 0.0
     if "牆面" in calc_mode:
-        wall_height = st.number_input("輸入樓層高度 (m)", value=3.0, step=0.1)
+        st.write("---")
+        st.markdown("#### 📏 設定樓高")
+        wall_height = st.number_input("請輸入樓層高度 (m)", value=3.0, step=0.1, format="%.2f")
+        st.caption(f"計算公式將為：周長 × {wall_height} m")
 
-# --- 3. Main Screen ---
+# --- 3. 主畫面 ---
 st.title("🏗️ AI 全能工程算量平台")
 st.markdown("---")
 
@@ -57,30 +61,47 @@ with col_result:
             try:
                 genai.configure(api_key=api_key)
                 
-                # --- AUTO-DETECT MODEL LOGIC ---
                 target_model_name = ""
-                with st.spinner("正在搜尋可用模型..."):
+                
+                # --- 關鍵修正：智慧模型篩選器 ---
+                with st.spinner("正在搜尋可用的視覺模型..."):
                     try:
-                        all_models = [m.name for m in genai.list_models()]
-                        # Priority: Flash -> Pro Vision -> Pro
-                        if 'models/gemini-1.5-flash' in all_models:
-                            target_model_name = 'gemini-1.5-flash'
-                        elif 'models/gemini-pro-vision' in all_models:
-                            target_model_name = 'gemini-pro-vision'
-                        elif 'models/gemini-1.5-pro' in all_models:
-                            target_model_name = 'gemini-1.5-pro'
-                        else:
-                            # Fallback to the first available model
-                            target_model_name = all_models[0].replace('models/', '')
-                            
-                        st.success(f"✅ 已連線至模型：`{target_model_name}`")
+                        # 取得所有模型物件
+                        all_models = list(genai.list_models())
                         
+                        # 1. 先找最新的 Flash 模型 (速度快、支援度高)
+                        for m in all_models:
+                            if 'gemini-1.5-flash' in m.name and 'vision' not in m.name: 
+                                # 註：有些舊版sdk會把vision分開，但1.5-flash本身就支援視覺
+                                target_model_name = m.name
+                                break
+                        
+                        # 2. 如果沒找到，找 Pro Vision (舊版穩定)
+                        if not target_model_name:
+                            for m in all_models:
+                                if 'gemini-pro-vision' in m.name:
+                                    target_model_name = m.name
+                                    break
+                        
+                        # 3. 真的都沒有，才找任何有 gemini 字樣的
+                        if not target_model_name:
+                            for m in all_models:
+                                if 'gemini' in m.name and 'embedding' not in m.name:
+                                    target_model_name = m.name
+                                    break
+                        
+                        if target_model_name:
+                            st.success(f"✅ 已連線至模型：`{target_model_name}`")
+                        else:
+                            st.error("❌ 找不到任何可用的 Gemini 模型，請檢查 API Key 權限。")
+                            st.stop()
+
                     except Exception as e:
-                        # Hard fallback if listing fails
-                        target_model_name = 'gemini-1.5-flash'
+                        # 如果連列表都抓不到，直接強制指定一個最通用的
+                        target_model_name = 'models/gemini-1.5-flash'
                         st.warning(f"⚠️ 無法自動搜尋，嘗試強制使用：`{target_model_name}`")
 
-                # Configure Model
+                # 設定模型
                 model = genai.GenerativeModel(target_model_name)
                 
                 with st.spinner("AI 正在讀圖並進行運算..."):
@@ -100,27 +121,56 @@ with col_result:
 
                     prompt = f"""
                     你是一位專業的建築估算師。請依照以下規則分析這張圖說：
-                    【使用者定義】{user_definition}
-                    【計算目標】{math_logic}
-                    【輸出格式】請輸出 JSON 格式清單，包含：item_name, description, formula_str, result, unit。
-                    不要輸出 Markdown 標記。
+
+                    【使用者定義】
+                    {user_definition}
+
+                    【計算目標】
+                    {math_logic}
+
+                    【輸出格式要求】
+                    請務必輸出一個 JSON 格式的清單，包含以下欄位：
+                    - "item_name": 項目名稱
+                    - "description": 計算邏輯說明
+                    - "formula_str": 數值運算式
+                    - "result": 最終結果數字 (浮點數)
+                    - "unit": 單位 ({unit_hint})
+
+                    若圖面模糊無法辨識，請略過。請直接輸出 JSON，不要 Markdown 標記。
                     """
                     
                     response = model.generate_content([prompt, image])
+                    
+                    # 解析 JSON
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     
                     try:
                         data = json.loads(clean_json)
                         if data:
                             df = pd.DataFrame(data)
+                            
                             st.success("✅ 計算完成！")
+                            
                             if "result" in df.columns:
                                 try:
-                                    st.metric("總數量 (Total)", f"{df['result'].sum():,.2f}")
+                                    total_val = df['result'].sum()
+                                    st.metric("總數量 (Total)", f"{total_val:,.2f} {df['unit'].iloc[0]}")
                                 except: pass
-                            st.dataframe(df, use_container_width=True)
+                            
+                            st.dataframe(
+                                df, 
+                                column_config={
+                                    "item_name": "項目/空間",
+                                    "description": "計算邏輯",
+                                    "formula_str": "算式過程",
+                                    "result": "小計",
+                                    "unit": "單位"
+                                },
+                                use_container_width=True
+                            )
+                            
                             csv = df.to_csv(index=False).encode('utf-8-sig')
-                            st.download_button("📥 下載計算書", csv, "takeoff.csv", "text/csv")
+                            st.download_button("📥 下載計算書 (CSV)", csv, "takeoff_report.csv", "text/csv")
                         else:
                             st.warning("AI 無法識別符合規則的物件。")
                     except:
