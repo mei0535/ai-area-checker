@@ -3,10 +3,10 @@ import google.generativeai as genai
 from PIL import Image
 import pandas as pd
 import json
-import fitz  # PyMuPDF 用來讀 PDF
+import fitz  # PyMuPDF
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (PDF/圖檔通用版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (智能偵測版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄 ---
 with st.sidebar:
@@ -36,13 +36,12 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (PDF 支援版)")
-st.caption("v6.1 Ultra: 修正模型連線 404 錯誤")
+st.title("🏗️ AI 工程算量平台 (PDF/智能偵測版)")
+st.caption("v7.0 Ultra: 自動偵測可用模型，解決 404 錯誤")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
 
-# 初始化 image 變數
 image = None
 
 with col_img:
@@ -51,21 +50,16 @@ with col_img:
     
     if uploaded_file:
         try:
-            # --- 判斷檔案類型 ---
             if uploaded_file.name.lower().endswith('.pdf'):
-                # 處理 PDF
                 with st.spinner("正在將 PDF 轉為高解析圖片..."):
                     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-                    page = doc[0]  # 讀取第一頁
+                    page = doc[0]
                     pix = page.get_pixmap(dpi=300)
                     image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     st.success(f"已讀取 PDF 第一頁 (共 {len(doc)} 頁)")
             else:
-                # 處理一般圖片
                 image = Image.open(uploaded_file)
-            
-            st.image(image, caption=f"預覽：{uploaded_file.name}", use_column_width=True)
-            
+            st.image(image, caption=f"預覽：{uploaded_file.name}", use_container_width=True)
         except Exception as e:
             st.error(f"檔案讀取失敗：{e}")
 
@@ -80,14 +74,28 @@ with col_data:
             try:
                 genai.configure(api_key=api_key)
                 
-                # --- 【關鍵修正】使用更精確的模型名稱 ---
-                # 如果 1.5-flash 報錯，通常改用 1.5-flash-001 或 gemini-pro-vision 就能解決
+                # --- 【關鍵修正】自動偵測模型 (不再寫死名稱) ---
+                target_model_name = "gemini-1.5-flash" # 預設值
                 try:
-                    model = genai.GenerativeModel('gemini-1.5-flash-001') # 嘗試精確版號
+                    # 問 API：我有什麼模型可以用？
+                    available_models = [m.name for m in genai.list_models()]
+                    
+                    # 優先找 1.5-flash
+                    for m in available_models:
+                        if "gemini-1.5-flash" in m:
+                            target_model_name = m
+                            break
+                    else:
+                        # 找不到就找 pro-vision
+                        for m in available_models:
+                             if "gemini-pro-vision" in m:
+                                 target_model_name = m
+                                 break
                 except:
-                    model = genai.GenerativeModel('gemini-1.5-flash') # 退回通用版號
+                    pass # 如果偵測失敗，就用預設值賭賭看
 
-                st.toast("連線成功！正在分析圖面...")
+                model = genai.GenerativeModel(target_model_name)
+                st.toast(f"連線成功！使用模型：{target_model_name}")
 
                 with st.spinner("AI 正在解讀圖面資訊..."):
                     
@@ -128,11 +136,10 @@ with col_data:
                     
             except Exception as e:
                 st.error(f"AI 發生錯誤：{e}")
-                st.info("建議檢查 API Key 是否正確，或稍後再試。")
+                st.info("若持續失敗，可能是 API Key 權限問題，請檢查 Google Cloud Console 設定。")
 
     # --- Data Editor ---
     if st.session_state.ai_data is not None:
-        
         edited_df = st.data_editor(
             st.session_state.ai_data,
             column_config={
@@ -180,6 +187,5 @@ with col_data:
         first_unit = result_df['單位'].iloc[0] if not result_df.empty else ""
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
         st.dataframe(result_df, use_container_width=True)
-        
         csv = result_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button("📥 下載報表", csv, "takeoff.csv", "text/csv")
