@@ -14,7 +14,7 @@ except ImportError:
     HAS_OPENPYXL = False
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v14.1 結構拆解版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v14.3 自適應修正版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -37,9 +37,9 @@ with st.sidebar:
     
     st.header("🤖 選擇模型")
     model_option = st.selectbox(
-        "建議使用 Pro 版本以執行空間拆解",
+        "建議使用 Pro 版本以進行幾何分類",
         [
-            "models/gemini-2.5-pro",       # 推薦：邏輯最強
+            "models/gemini-2.5-pro",       # 推薦：幾何邏輯最強
             "models/gemini-2.0-flash",     # 速度快
             "models/gemini-1.5-pro"
         ],
@@ -50,13 +50,13 @@ with st.sidebar:
     
     st.header("🎨 定義規則")
     
-    st.subheader("1. 辨識目標顏色")
-    st.info("系統將搜尋綠色 (Green) 與紅色 (Red) 區域")
+    st.subheader("1. 辨識目標")
+    st.info("系統將自動分類：L型 / 矩形 / 梯形")
     
     st.subheader("2. 空間/其他定義")
     user_definition = st.text_area(
         "補充說明", 
-        value="1. 將綠色區域拆解為：頂部(Top)、中間(Middle)、底部(Bottom)。\n2. 紅色區域(Red Box)獨立計算。\n3. 注意下方綠色區塊有斜角(Chamfer)。",
+        value="1. 簡單L型 (L-Shape) 請拆成兩個矩形相加。\n2. 看到斜角才用梯形公式。\n3. 紅色區塊獨立計算。",
         height=100
     )
     
@@ -70,8 +70,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v14.1 結構拆解版)")
-st.caption(f"✅ 強制分區掃描 (Top/Mid/Bot/Right) | 修正連通域誤判 | 當前模型: {model_option}")
+st.title("🏗️ AI 工程算量平台 (v14.3 自適應修正版)")
+st.caption(f"✅ 新增形狀分類器 (L-Shape/Rect/Trap) | 修正簡單圖形誤判 | 當前模型: {model_option}")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -108,39 +108,42 @@ with col_data:
             
             try:
                 model = genai.GenerativeModel(model_option)
-                st.toast(f"正在執行 v14.1 結構拆解分析...")
+                st.toast(f"正在進行幾何分類與運算...")
                 
-                # --- v14.1 Prompt: 強制拆解邏輯 ---
+                # --- v14.3 Prompt: 自適應幾何分類 ---
                 dim_instruction = ""
                 if "面積" in calc_mode:
                     dim_instruction = f"""
-                    1. **DECOMPOSITION STRATEGY (CRITICAL)**: 
-                       - The Green lines look connected, but they form THREE distinct zones. DO NOT calculate as one big shape.
-                       - **Zone A (Top Green)**: Look for dimensions 1100, 650, 675, 2425. It's an L-shape or rectangle cluster.
-                       - **Zone B (Middle Green)**: The vertical connecting corridor.
-                       - **Zone C (Bottom Green)**: The shape with width 2175/2545 and height 730. Note the SLANTED corner (Trapezoid).
-                       - **Zone D (Right Red)**: The separate RED box (width ~1600).
+                    1. **STEP 1: Shape Classification (CRITICAL)**:
+                       - Scan the image for closed shapes (Green/Red).
+                       - Classify each shape as: "Rectangle", "L-Shape" (combination of 2 rects), or "Trapezoid" (slanted edge).
                        
-                    2. **Dimension Logic**:
-                       - Units are mm. Convert to meters (e.g., 2545 -> 2.545).
-                       - **Zone C (Trapezoid)**: Use formula ((Top+Bottom)/2)*Height -> ((2.545+2.175)/2)*0.73.
-                       - **Zone D (Red Box)**: Width is ~1.6m. Estimate Height based on grid if not explicitly labeled (likely aligns with adjacent elements).
+                    2. **STEP 2: Apply Specific Math**:
+                       - **IF L-Shape**: You MUST split it into Rectangle A and Rectangle B. 
+                         - Math: `(Length_A * Width_A) + (Length_B * Width_B)`.
+                         - Note example: "Split: (2.4*1.1) + (1.2*0.8)".
+                       - **IF Trapezoid** (Slanted corner): 
+                         - Math: `((Top + Bottom) / 2) * Height`.
+                       - **IF Simple Rectangle**:
+                         - Math: `Length * Width`.
+                         
+                    3. **STEP 3: Dimension Extraction**:
+                       - Dimensions are in mm. Convert to meters (e.g., 2425 -> 2.425).
+                       - Use Magenta/Purple lines for numbers.
                        
-                    3. **Output Requirements**:
-                       - You MUST return at least 3-4 separate items.
-                       - JSON keys: "zone_hint" (e.g., Top, Bottom, RedBox), "item", "dim1", "dim2", "note".
-                       - 'dim1' = Net Area (m²). 'dim2' = 1.
-                       - In 'note', show the formula used (e.g., "1.1*0.8 + 0.65*0.45").
+                    4. **Output Format**:
+                       - JSON list with keys: "shape_type", "item", "dim1", "dim2", "note".
+                       - 'dim1' = Calculated Net Area. 'dim2' = 1.
                     """
                 elif "周長" in calc_mode or "牆面" in calc_mode:
                     dim_instruction = f"""
-                    1. Trace boundaries of Top Green, Bottom Green, and Red Box separately.
+                    1. Trace boundaries of all shapes.
                     2. Sum segments.
-                    3. Set 'dim1' = Perimeter (m), 'dim2' = 0.
+                    3. Set 'dim1' = Total Perimeter (m), 'dim2' = 0.
                     """
 
                 prompt = f"""
-                You are a Senior Quantity Surveyor. Analyze this image using the Decomposition Strategy.
+                You are a Senior Quantity Surveyor. Analyze this image.
                 User Rules: {user_definition}
                 
                 TASK:
@@ -155,7 +158,7 @@ with col_data:
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success(f"✅ 辨識完成 (已拆解為多個區域)")
+                    st.success(f"✅ 辨識完成")
                 except:
                     st.error("AI 回傳格式無法解析")
                     st.write("Raw output:", response.text)
@@ -168,11 +171,11 @@ with col_data:
         edited_df = st.data_editor(
             st.session_state.ai_data,
             column_config={
-                "zone_hint": "區域 (Zone)",
+                "shape_type": "形狀分類",
                 "item": "項目說明",
-                "dim1": st.column_config.NumberColumn("長度/面積 (m)", format="%.3f"),
+                "dim1": st.column_config.NumberColumn("長度/淨面積 (m/m²)", format="%.3f"),
                 "dim2": st.column_config.NumberColumn("寬度/系數", format="%.3f"),
-                "note": "AI 計算式 (請核對)"
+                "note": "AI 計算依據"
             },
             num_rows="dynamic",
             use_container_width=True
@@ -187,21 +190,30 @@ with col_data:
             
             val = 0.0
             unit = ""
+            formula_str = ""
             
             if "面積" in calc_mode:
                 val = d1 * d2 
                 unit = "m²"
+                # 顯示邏輯：若 dim2=1 且 note 中有 + 號，代表是組合運算
+                if d2 == 1.0:
+                    formula_str = f"Net Area ({row.get('shape_type','Custom')})"
+                else:
+                    formula_str = f"{d1} * {d2}"
+                    
             elif "周長" in calc_mode:
                 val = d1 
                 unit = "m"
+                formula_str = f"{d1}"
             elif "牆面" in calc_mode:
                 val = d1 * wall_height
                 unit = "m²"
+                formula_str = f"{d1} * {wall_height}"
             
             results.append({
-                "區域": row.get("zone_hint", ""),
+                "形狀": row.get("shape_type", ""),
                 "項目": row.get("item", ""),
-                "計算式": f"{d1}*{d2}" if "面積" in calc_mode else f"{d1}",
+                "計算式": formula_str,
                 "小計": round(val, 2),
                 "單位": unit,
                 "備註": row.get("note", "")
@@ -216,7 +228,7 @@ with col_data:
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
         st.dataframe(result_df, use_container_width=True)
         
-        # --- [v14.1 穩定匯出模組] ---
+        # --- [v14.3 穩定匯出模組] ---
         if not result_df.empty:
             st.subheader("4. 匯出選項")
             
