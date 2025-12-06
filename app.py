@@ -4,9 +4,10 @@ from PIL import Image
 import pandas as pd
 import json
 import fitz  # PyMuPDF
+import io    # 新增：用於處理二進制流 (Excel 匯出)
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v13.0 2025世代版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v13.4 Excel 匯出版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -15,7 +16,6 @@ with st.sidebar:
     st.info("ℹ️ 請輸入您的 Google API Key (AIza 開頭)")
     api_key = st.text_input("API Key", type="password", placeholder="貼上 AIza... 開頭的 Key")
     
-    # [檢測按鈕保留]
     if api_key:
         if st.button("🔍 再次列出可用模型"):
             try:
@@ -28,31 +28,62 @@ with st.sidebar:
 
     st.divider()
     
-    # --- [關鍵更新] 這裡更新為您帳號實際擁有的模型 ---
     st.header("🤖 選擇模型")
     model_option = st.selectbox(
-        "建議優先使用 2.5 Flash",
+        "建議使用 Pro 版本以精準識別顏色",
         [
-            "models/gemini-2.5-flash",       # 首選：最新一代 Flash
-            "models/gemini-2.5-pro",         # 次選：最新一代 Pro
-            "models/gemini-2.0-flash",       # 備用：2.0 穩定版
-            "models/gemini-flash-latest",    # 通用：指向最新 Flash
-            "models/gemini-1.5-flash"        # 舊版：相容性保留
+            "models/gemini-2.5-pro",       # 推薦：顏色與幾何邏輯最強
+            "models/gemini-2.5-flash",     # 速度快
+            "models/gemini-2.0-flash",     # 備用
+            "models/gemini-1.5-pro"
         ],
-        index=0 # 預設選第一個 (2.5-flash)
+        index=0 
     )
     
     st.divider()
     
     st.header("🎨 定義規則")
+    
+    # 尺寸顏色選擇器
+    st.subheader("1. 尺寸標註顏色")
+    st.caption("請指定圖面上「尺寸線/數字」的顏色：")
+    dim_color_ui = st.selectbox(
+        "選擇顏色 (Dimension Color)",
+        [
+            "Magenta (紫紅/洋紅)", 
+            "Red (紅)", 
+            "Yellow (黃)", 
+            "Green (綠)", 
+            "Cyan (青)", 
+            "Blue (藍)", 
+            "White/Black (白/黑)",
+            "Orange (橘)"
+        ],
+        index=0 
+    )
+    
+    # 顏色映射字典
+    color_map = {
+        "Magenta (紫紅/洋紅)": "Magenta/Purple",
+        "Red (紅)": "Red",
+        "Yellow (黃)": "Yellow",
+        "Green (綠)": "Green",
+        "Cyan (青)": "Cyan",
+        "Blue (藍)": "Blue",
+        "White/Black (白/黑)": "White or Black",
+        "Orange (橘)": "Orange"
+    }
+    selected_dim_color = color_map[dim_color_ui]
+
+    st.subheader("2. 空間/其他定義")
     user_definition = st.text_area(
-        "1. 空間/顏色定義", 
-        value="例如：\n- 黃色線段範圍是「A戶辦公室」\n- 紅色線段範圍是「B戶會議室」",
+        "補充說明 (例如：綠色線是牆心...)", 
+        value="例如：綠色線 (Green Lines) 是房間邊界範圍",
         height=100
     )
     
     calc_mode = st.radio(
-        "2. 計算模式",
+        "3. 計算模式",
         ["計算平面面積 (Area)", "計算周長 (Perimeter)", "計算牆面/表面積 (周長 x 高度)"]
     )
     
@@ -61,8 +92,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v13.0 2025世代版)")
-st.caption(f"✅ 已適配最新 Gemini 2.5/3.0 模型架構 | 當前選擇: {model_option}")
+st.title("🏗️ AI 工程算量平台 (v13.4 Excel 匯出版)")
+st.caption(f"✅ 已鎖定尺寸顏色: {selected_dim_color} | 支援 .xlsx 匯出 | 模型: {model_option}")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -98,22 +129,43 @@ with col_data:
             genai.configure(api_key=api_key)
             
             try:
-                # 使用側邊欄選取的模型
                 model = genai.GenerativeModel(model_option)
-                st.toast(f"正在連線模型：{model_option} ...")
+                st.toast(f"正在鎖定 {selected_dim_color} 色層進行分析...")
                 
+                # Prompt 邏輯
                 dim_instruction = ""
                 if "面積" in calc_mode:
-                    dim_instruction = "請分別抓取「長度 (Length)」與「寬度 (Width)」。"
+                    dim_instruction = f"""
+                    1. **STRICT COLOR RULE**: 
+                       - ONLY look for numbers and dimension lines in **{selected_dim_color}** color.
+                       - Ignore numbers in other colors.
+                    2. **Unit Conversion**: Dimensions are in mm. Convert to meters (e.g., 2545 -> 2.545).
+                    3. **Geometry Logic**:
+                       - **Irregular/Chamfered Shapes**: Use the dimension lines ({selected_dim_color}) to calculate the Net Area.
+                       - **Trapezoids**: (Top + Bottom)/2 * Height.
+                       - **Output**: Set 'dim1' = Net Area (m²), Set 'dim2' = 1.
+                       - **Note**: Write the formula you used.
+                    """
                 elif "周長" in calc_mode or "牆面" in calc_mode:
-                    dim_instruction = "請抓取該範圍所有邊長的總和做為「長度 (dim1)」，寬度填 0。"
+                    dim_instruction = f"""
+                    1. Trace the boundary lines (defined in user rules).
+                    2. Use the **{selected_dim_color}** numbers to determine segment lengths.
+                    3. Sum all segments.
+                    4. Set 'dim1' = Total Perimeter (m), 'dim2' = 0.
+                    """
 
                 prompt = f"""
-                You are a Quantity Surveyor. Analyze this image based on user rules: {user_definition}.
-                IMPORTANT: If numbers are in mm (e.g., 3500), convert to meters (3.5).
-                Task: {dim_instruction}
+                You are a Senior Quantity Surveyor. Analyze this image.
+                
+                USER DEFINED RULES:
+                - Dimension Color: **{selected_dim_color}** (Primary Source of Truth for lengths)
+                - Other Rules: {user_definition}
+                
+                TASK:
+                {dim_instruction}
+                
                 Return ONLY a JSON list (no markdown) with keys: "item", "dim1", "dim2", "note".
-                Example: [{{"item": "Office A", "dim1": 5.2, "dim2": 3.0, "note": "text"}}]
+                Example: [{{"item": "Room A", "dim1": 1.722, "dim2": 1.0, "note": "Trapezoid calc using {selected_dim_color} dims"}}]
                 """
                 
                 response = model.generate_content([prompt, image])
@@ -122,14 +174,13 @@ with col_data:
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success("✅ 辨識成功！")
+                    st.success(f"✅ 辨識完成 (已過濾 {selected_dim_color} 尺寸)")
                 except:
                     st.error("AI 回傳格式無法解析，請重試或更換模型。")
                     st.write("Raw output:", response.text)
                 
             except Exception as e:
                 st.error(f"❌ 連線失敗")
-                st.warning("建議在左側選單換一個模型試試看 (例如從 2.5-flash 換成 2.5-pro)。")
                 st.error(str(e))
 
     # --- Data Editor & Calculation ---
@@ -138,9 +189,9 @@ with col_data:
             st.session_state.ai_data,
             column_config={
                 "item": "項目",
-                "dim1": st.column_config.NumberColumn("長度/周長 (m)", format="%.2f"),
-                "dim2": st.column_config.NumberColumn("寬度 (m)", format="%.2f"),
-                "note": "AI 備註"
+                "dim1": st.column_config.NumberColumn("長度/面積 (m/m²)", format="%.3f"),
+                "dim2": st.column_config.NumberColumn("寬度/系數", format="%.3f"),
+                "note": "AI 計算說明"
             },
             num_rows="dynamic",
             use_container_width=True
@@ -157,7 +208,7 @@ with col_data:
             unit = ""
             
             if "面積" in calc_mode:
-                val = d1 * d2
+                val = d1 * d2 
                 unit = "m²"
             elif "周長" in calc_mode:
                 val = d1 
@@ -168,15 +219,37 @@ with col_data:
             
             results.append({
                 "項目": row.get("item", ""),
-                "計算式": f"{d1}*{d2}" if "面積" in calc_mode else (f"{d1}*{wall_height}" if "牆面" in calc_mode else f"{d1}"),
+                "計算式": f"{d1} * {d2}" if "面積" in calc_mode else (f"{d1} * {wall_height}" if "牆面" in calc_mode else f"{d1}"),
                 "小計": round(val, 2),
-                "單位": unit
+                "單位": unit,
+                "備註": row.get("note", "")
             })
             
         result_df = pd.DataFrame(results)
         st.divider()
         st.subheader("3. 最終計算書")
+        
+        # 顯示總計
         total_val = result_df["小計"].sum()
         first_unit = result_df['單位'].iloc[0] if not result_df.empty else ""
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
+        
+        # 顯示表格
         st.dataframe(result_df, use_container_width=True)
+        
+        # --- [新增] Excel 匯出功能 ---
+        if not result_df.empty:
+            # 建立 Excel Buffer
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                result_df.to_excel(writer, index=False, sheet_name='工程算量')
+                # 這裡可以加入更多 Sheet，例如原始數據等
+            
+            excel_data = output.getvalue()
+            
+            st.download_button(
+                label="📥 下載 Excel 計算書",
+                data=excel_data,
+                file_name="AI_Quantity_Takeoff.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
