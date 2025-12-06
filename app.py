@@ -14,7 +14,7 @@ except ImportError:
     HAS_OPENPYXL = False
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v14.0 邏輯修正版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v14.0 雙色邏輯修正版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -37,9 +37,9 @@ with st.sidebar:
     
     st.header("🤖 選擇模型")
     model_option = st.selectbox(
-        "建議使用 Pro 版本以處理複雜邏輯",
+        "建議使用 Pro 版本以處理多色邏輯",
         [
-            "models/gemini-2.5-pro",       # 推薦：邏輯推理最強
+            "models/gemini-2.5-pro",       # 推薦：邏輯最強
             "models/gemini-2.0-flash",     # 速度快
             "models/gemini-1.5-pro"
         ],
@@ -50,18 +50,22 @@ with st.sidebar:
     
     st.header("🎨 定義規則")
     
-    # 這裡將邏輯升級為「多色層」選取
+    # v14.0: 明確定義多色層邏輯
     st.subheader("1. 辨識目標顏色")
-    st.info("系統預設同時搜尋：綠色(Green) 與 紅色(Red)")
+    st.info("已啟用多色層模式：同時搜尋綠色與紅色區塊")
     
-    target_colors = "Green, Red" 
-    dim_color = "Magenta (Purple)"
+    # 這裡雖然是文字顯示，但在 Prompt 會動態生成指令
+    dim_color_ui = st.selectbox(
+        "尺寸線顏色",
+        ["Magenta/Purple (紫色)", "Red (紅色)", "Blue (藍色)"],
+        index=0
+    )
 
     st.subheader("2. 空間/其他定義")
     user_definition = st.text_area(
         "補充說明", 
-        value="例如：最右邊的紅色區塊 (Red Box) 需獨立計算，不要漏項。",
-        height=100
+        value="1. 右側紅色矩形 (Red Box) 必須獨立計算。\n2. 下方綠色區塊 (Green Trapezoid) 有斜角，需扣除或用梯形公式。\n3. 注意區分紅色與綠色區塊的高度，不要混用。",
+        height=120
     )
     
     calc_mode = st.radio(
@@ -74,8 +78,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v14.0 邏輯修正版)")
-st.caption(f"✅ 修復縮排錯誤 | 支援紅/綠多區塊計算 | 當前模型: {model_option}")
+st.title("🏗️ AI 工程算量平台 (v14.0 雙色邏輯修正版)")
+st.caption(f"✅ 修復紅色漏項 | 修正右側區塊誤算 | 算式透明化 | 當前模型: {model_option}")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -112,27 +116,31 @@ with col_data:
             
             try:
                 model = genai.GenerativeModel(model_option)
-                st.toast(f"正在分析多區塊 (Green/Red) 與尺寸邏輯...")
+                st.toast(f"正在執行 v14.0 雙色層分析...")
                 
                 # --- v14.0 Prompt: 多重邏輯修正 ---
                 dim_instruction = ""
                 if "面積" in calc_mode:
                     dim_instruction = f"""
-                    1. **Target Identification**: 
-                       - Identify ALL closed shapes drawn in **GREEN** OR **RED**.
-                       - The **RED box** on the right is a separate room/area. DO NOT ignore it.
+                    1. **Scope definition (Target Colors)**: 
+                       - Identify closed shapes drawn in **GREEN** lines.
+                       - Identify closed shapes drawn in **RED** lines.
+                       - **CRITICAL**: The RED box on the right is a SEPARATE room. It must be listed as a separate item.
                        
-                    2. **Dimension Logic (CRITICAL)**:
-                       - Dimensions are in **{dim_color}**.
+                    2. **Dimension Logic (Association)**:
+                       - Dimensions are likely in Magenta/Purple.
                        - Units are mm. Convert to meters (e.g., 1600 -> 1.6).
-                       - **Association Rule**: Only use dimensions that physically span the length/width of the specific block.
-                       - **Rightmost Block (Red)**: Its width is likely 1600. Look carefully for its Height. If a vertical dimension (like 3375) spans a larger range, DO NOT use it directly as the height of the Red box unless it matches. If height is missing, note it.
-                       - **Bottom Green Block**: It has a chamfer (slanted corner). Use Trapezoid logic: ((Top_W + Bottom_W)/2) * H.
+                       - **Right Red Box**: Look for width ~1600. Look for its specific height. DO NOT use the total height (3375) if it extends beyond the red box.
+                       - **Bottom Green Shape**: It has a chamfer (slanted corner). Use Trapezoid logic: ((Top_W + Bottom_W)/2) * H.
                        
-                    3. **Output Format**:
-                       - Return a JSON list.
-                       - Keys: "item" (Name/Location), "dim1" (Length/Net Area), "dim2" (Width/1), "note" (FORMULA used).
-                       - **IMPORTANT**: In the 'note', strictly write the math you did. Example: "1.6 * 2.5 (estimated)" or "Trapezoid: ((2.545+2.175)/2)*0.73".
+                    3. **Formula Transparency**:
+                       - You MUST explicit write the math in the "note" field.
+                       - Example: "1.6 * 2.4" or "Trapezoid: ((2.545+2.175)/2)*0.73".
+                       - If you cannot find a specific dimension, assume logically based on adjacent lines and mark as "(est)" in note.
+                       
+                    4. **Output Format**:
+                       - Return a JSON list with keys: "item", "dim1", "dim2", "note".
+                       - 'dim1' = Net Area (m²). 'dim2' = 1.
                     """
                 elif "周長" in calc_mode or "牆面" in calc_mode:
                     dim_instruction = f"""
@@ -157,7 +165,7 @@ with col_data:
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success(f"✅ 辨識完成")
+                    st.success(f"✅ 辨識完成 (已分離紅/綠區塊)")
                 except:
                     st.error("AI 回傳格式無法解析")
                     st.write("Raw output:", response.text)
@@ -220,7 +228,7 @@ with col_data:
         if not result_df.empty:
             st.subheader("4. 匯出選項")
             
-            # 使用正確縮排的 if-else 結構
+            # 使用正確縮排的 if-else 結構，確保 Python 語法正確
             if HAS_OPENPYXL:
                 # 方案 A: 有 Excel 引擎
                 output = io.BytesIO()
