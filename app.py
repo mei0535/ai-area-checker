@@ -7,16 +7,26 @@ import fitz  # PyMuPDF
 import time
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v9.0)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (公開試用版)", page_icon="🏗️", layout="wide")
 
-# --- 2. 側邊欄 ---
+# --- 2. 側邊欄：BYOK 設定區 ---
 with st.sidebar:
-    st.header("🔑 系統設定")
-    try:
-        default_key = st.secrets["GOOGLE_API_KEY"]
-    except:
-        default_key = ""
-    api_key = st.text_input("輸入 Google API Key", value=default_key, type="password")
+    st.header("🔑 啟動金鑰")
+    
+    st.info("ℹ️ 本系統採用 BYOK 模式 (Bring Your Own Key)。請輸入您自己的 Google API Key 即可免費使用。")
+    
+    # --- 關鍵修改：不讀取 secrets，強制手動輸入 ---
+    api_key = st.text_input("請輸入 Google API Key", type="password", placeholder="貼上您的 Key (sk-...)")
+    
+    # 貼心功能：提供申請連結
+    st.markdown("""
+    [👉 點此免費申請 Google API Key](https://aistudio.google.com/app/apikey)
+    
+    <small>申請步驟：
+    1. 登入 Google 帳號
+    2. 點擊 'Create API key'
+    3. 複製 Key 並貼上欄位</small>
+    """, unsafe_allow_html=True)
     
     st.divider()
     
@@ -37,8 +47,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v9.0 最終成功版)")
-st.caption("✅ 如果您看到這個標題，代表程式碼更新成功了！")
+st.title("🏗️ AI 工程算量平台 (公開試用版)")
+st.caption("v10.0 BYOK: 開放式試用架構，請輸入金鑰以開始")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -70,79 +80,90 @@ with col_data:
     if 'ai_data' not in st.session_state:
         st.session_state.ai_data = None
 
-    if image and api_key:
-        if st.button("🚀 執行 AI 辨識 (v9.0)", type="primary"):
-            
-            genai.configure(api_key=api_key)
-            
-            # --- 暴力通關邏輯 ---
-            # 這裡包含所有可能的模型名稱，一定有一個能用
-            candidate_models = [
-                'gemini-1.5-flash',
-                'models/gemini-1.5-flash',
-                'gemini-1.5-flash-001',
-                'gemini-pro',
-                'models/gemini-pro'
-            ]
-            
-            success_model = None
-            response = None
-            error_log = []
+    # 檢查是否有圖檔
+    if image:
+        # 檢查是否有 Key
+        if not api_key:
+            st.warning("⚠️ 請先在左側欄位輸入您的 Google API Key 才能開始辨識。")
+        else:
+            if st.button("🚀 執行 AI 辨識", type="primary"):
+                
+                # 設定使用者提供的 Key
+                genai.configure(api_key=api_key)
+                
+                candidate_models = [
+                    'gemini-1.5-flash',
+                    'models/gemini-1.5-flash',
+                    'gemini-1.5-flash-001',
+                    'gemini-pro',
+                    'models/gemini-pro'
+                ]
+                
+                success_model = None
+                response = None
+                error_log = []
 
-            with st.spinner("正在尋找可用的 AI 模型 (自動切換中)..."):
-                for model_name in candidate_models:
+                with st.spinner("正在連線 AI 模型..."):
+                    for model_name in candidate_models:
+                        try:
+                            model = genai.GenerativeModel(model_name)
+                            
+                            dim_instruction = ""
+                            if "面積" in calc_mode:
+                                dim_instruction = "請分別抓取該區域的「長度 (Length)」與「寬度 (Width)」。"
+                            elif "周長" in calc_mode or "牆面" in calc_mode:
+                                dim_instruction = "請抓取該範圍所有邊長的總和做為「長度 (dim1)」，寬度填 0。"
+
+                            prompt = f"""
+                            你是一位專業的建築估算師。請分析這張圖。
+                            【任務目標】：
+                            1. 找到符合使用者描述："{user_definition}" 的線段或區域。
+                            2. 讀取該區域的尺寸標註數字。
+                            
+                            【重要規則】：
+                            - **單位換算**：圖紙數字若為 mm (如 3500)，請除以 1000 換算為 m (如 3.5)。
+                            - **排除干擾**：忽略標高(FL)、編號、圖號。只抓尺寸。
+                            - {dim_instruction}
+                            
+                            請輸出純 JSON 格式 (無 markdown)：
+                            [
+                                {{
+                                    "item": "項目名稱",
+                                    "dim1": 數字(長度/周長, m),
+                                    "dim2": 數字(寬度, m, 若無0),
+                                    "note": "備註"
+                                }}
+                            ]
+                            """
+                            
+                            response = model.generate_content([prompt, image])
+                            success_model = model_name
+                            break 
+                            
+                        except Exception as e:
+                            # 捕捉如果是 Key 錯誤，直接回報給使用者
+                            if "API_KEY_INVALID" in str(e) or "403" in str(e):
+                                error_log.append(f"API Key 無效或權限不足")
+                                break # Key 錯了就不用試其他模型了，直接跳出
+                            
+                            error_log.append(f"{model_name} 連線失敗")
+                            continue
+
+                if success_model and response:
+                    st.toast(f"✅ 連線成功！使用模型：{success_model}")
                     try:
-                        # 測試連線
-                        model = genai.GenerativeModel(model_name)
-                        
-                        dim_instruction = ""
-                        if "面積" in calc_mode:
-                            dim_instruction = "請分別抓取該區域的「長度 (Length)」與「寬度 (Width)」。"
-                        elif "周長" in calc_mode or "牆面" in calc_mode:
-                            dim_instruction = "請抓取該範圍所有邊長的總和做為「長度 (dim1)」，寬度填 0。"
-
-                        prompt = f"""
-                        你是一位專業的建築估算師。請分析這張圖。
-                        【任務目標】：
-                        1. 找到符合使用者描述："{user_definition}" 的線段或區域。
-                        2. 讀取該區域的尺寸標註數字。
-                        
-                        【重要規則】：
-                        - **單位換算**：圖紙數字若為 mm (如 3500)，請除以 1000 換算為 m (如 3.5)。
-                        - **排除干擾**：忽略標高(FL)、編號、圖號。只抓尺寸。
-                        - {dim_instruction}
-                        
-                        請輸出純 JSON 格式 (無 markdown)：
-                        [
-                            {{
-                                "item": "項目名稱",
-                                "dim1": 數字(長度/周長, m),
-                                "dim2": 數字(寬度, m, 若無0),
-                                "note": "備註"
-                            }}
-                        ]
-                        """
-                        
-                        response = model.generate_content([prompt, image])
-                        success_model = model_name
-                        break # 成功跳出
-                        
-                    except Exception as e:
-                        error_log.append(f"{model_name} 失敗")
-                        continue
-
-            if success_model and response:
-                st.toast(f"✅ 連線成功！使用模型：{success_model}")
-                try:
-                    clean_json = response.text.replace("```json", "").replace("```", "").strip()
-                    data = json.loads(clean_json)
-                    st.session_state.ai_data = pd.DataFrame(data)
-                    st.success("辨識完成！")
-                except:
-                    st.error("AI 回傳格式有誤，請再試一次。")
-            else:
-                st.error("❌ 所有模型嘗試皆失敗。")
-                st.write("錯誤紀錄:", error_log)
+                        clean_json = response.text.replace("```json", "").replace("```", "").strip()
+                        data = json.loads(clean_json)
+                        st.session_state.ai_data = pd.DataFrame(data)
+                        st.success("辨識完成！")
+                    except:
+                        st.error("AI 回傳資料格式有誤，請再試一次。")
+                else:
+                    if "API Key 無效" in str(error_log):
+                        st.error("🚫 您的 API Key 無效。請檢查是否複製完整，或是否已在 Google AI Studio 開通權限。")
+                    else:
+                        st.error("❌ 連線失敗，請稍後再試。")
+                        st.write("Debug info:", error_log)
 
     # --- Data Editor ---
     if st.session_state.ai_data is not None:
