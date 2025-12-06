@@ -3,7 +3,7 @@ import google.generativeai as genai
 from PIL import Image
 import pandas as pd
 import json
-import fitz  # 這是新安裝的 PyMuPDF 套件，用來讀 PDF
+import fitz  # PyMuPDF 用來讀 PDF
 
 # --- 1. 網頁設定 ---
 st.set_page_config(page_title="AI 工程算量平台 (PDF/圖檔通用版)", page_icon="🏗️", layout="wide")
@@ -37,7 +37,7 @@ with st.sidebar:
 
 # --- 3. 主畫面 ---
 st.title("🏗️ AI 工程算量平台 (PDF 支援版)")
-st.caption("v6.0 Ultra: 支援 PDF 自動轉檔與 AI 識別")
+st.caption("v6.1 Ultra: 修正模型連線 404 錯誤")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -47,26 +47,24 @@ image = None
 
 with col_img:
     st.subheader("1. 圖說檢視")
-    # 這裡增加了 pdf 格式支援
     uploaded_file = st.file_uploader("上傳圖檔 (JPG/PNG/PDF)", type=["jpg", "jpeg", "png", "pdf"])
     
     if uploaded_file:
         try:
             # --- 判斷檔案類型 ---
             if uploaded_file.name.lower().endswith('.pdf'):
-                # 處理 PDF：將第一頁轉為圖片
+                # 處理 PDF
                 with st.spinner("正在將 PDF 轉為高解析圖片..."):
                     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
                     page = doc[0]  # 讀取第一頁
-                    pix = page.get_pixmap(dpi=300)  # 設定 300 DPI 高解析度
+                    pix = page.get_pixmap(dpi=300)
                     image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     st.success(f"已讀取 PDF 第一頁 (共 {len(doc)} 頁)")
             else:
                 # 處理一般圖片
                 image = Image.open(uploaded_file)
             
-            # 顯示圖片
-            st.image(image, caption=f"預覽：{uploaded_file.name}", use_container_width=True)
+            st.image(image, caption=f"預覽：{uploaded_file.name}", use_column_width=True)
             
         except Exception as e:
             st.error(f"檔案讀取失敗：{e}")
@@ -77,14 +75,18 @@ with col_data:
     if 'ai_data' not in st.session_state:
         st.session_state.ai_data = None
 
-    # 確保有圖片又有 Key 才能按按鈕
     if image and api_key:
         if st.button("🚀 執行 AI 辨識", type="primary"):
             try:
                 genai.configure(api_key=api_key)
                 
-                # 指定模型
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # --- 【關鍵修正】使用更精確的模型名稱 ---
+                # 如果 1.5-flash 報錯，通常改用 1.5-flash-001 或 gemini-pro-vision 就能解決
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash-001') # 嘗試精確版號
+                except:
+                    model = genai.GenerativeModel('gemini-1.5-flash') # 退回通用版號
+
                 st.toast("連線成功！正在分析圖面...")
 
                 with st.spinner("AI 正在解讀圖面資訊..."):
@@ -125,7 +127,8 @@ with col_data:
                     st.success("✅ 辨識完成！")
                     
             except Exception as e:
-                st.error(f"發生錯誤：{e}")
+                st.error(f"AI 發生錯誤：{e}")
+                st.info("建議檢查 API Key 是否正確，或稍後再試。")
 
     # --- Data Editor ---
     if st.session_state.ai_data is not None:
@@ -142,7 +145,6 @@ with col_data:
             use_container_width=True
         )
         
-        # --- 自動計算 ---
         results = []
         for index, row in edited_df.iterrows():
             try: d1 = float(row.get("dim1", 0))
