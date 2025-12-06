@@ -7,7 +7,6 @@ import fitz  # PyMuPDF
 import io    # 處理資料流
 
 # --- [防呆機制] 檢測 Excel 引擎 ---
-# 為了防止環境沒有安裝 openpyxl 導致崩潰，我們先做檢測
 try:
     import openpyxl
     HAS_OPENPYXL = True
@@ -15,7 +14,7 @@ except ImportError:
     HAS_OPENPYXL = False
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v13.6 修復版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v14.0 邏輯修正版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -38,11 +37,10 @@ with st.sidebar:
     
     st.header("🤖 選擇模型")
     model_option = st.selectbox(
-        "建議使用 Pro 版本以精準識別顏色",
+        "建議使用 Pro 版本以處理複雜邏輯",
         [
-            "models/gemini-2.5-pro",       # 推薦
-            "models/gemini-2.5-flash",     
-            "models/gemini-2.0-flash",     
+            "models/gemini-2.5-pro",       # 推薦：邏輯推理最強
+            "models/gemini-2.0-flash",     # 速度快
             "models/gemini-1.5-pro"
         ],
         index=0 
@@ -52,39 +50,17 @@ with st.sidebar:
     
     st.header("🎨 定義規則")
     
-    # 尺寸顏色選擇器
-    st.subheader("1. 尺寸標註顏色")
-    dim_color_ui = st.selectbox(
-        "選擇顏色 (Dimension Color)",
-        [
-            "Magenta (紫紅/洋紅)", 
-            "Red (紅)", 
-            "Yellow (黃)", 
-            "Green (綠)", 
-            "Cyan (青)", 
-            "Blue (藍)", 
-            "White/Black (白/黑)", 
-            "Orange (橘)"
-        ],
-        index=0 
-    )
+    # 這裡將邏輯升級為「多色層」選取
+    st.subheader("1. 辨識目標顏色")
+    st.info("系統預設同時搜尋：綠色(Green) 與 紅色(Red)")
     
-    color_map = {
-        "Magenta (紫紅/洋紅)": "Magenta/Purple",
-        "Red (紅)": "Red",
-        "Yellow (黃)": "Yellow",
-        "Green (綠)": "Green",
-        "Cyan (青)": "Cyan",
-        "Blue (藍)": "Blue",
-        "White/Black (白/黑)": "White or Black",
-        "Orange (橘)": "Orange"
-    }
-    selected_dim_color = color_map[dim_color_ui]
+    target_colors = "Green, Red" 
+    dim_color = "Magenta (Purple)"
 
     st.subheader("2. 空間/其他定義")
     user_definition = st.text_area(
         "補充說明", 
-        value="例如：綠色線 (Green Lines) 是房間邊界範圍",
+        value="例如：最右邊的紅色區塊 (Red Box) 需獨立計算，不要漏項。",
         height=100
     )
     
@@ -98,8 +74,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v13.6 修復版)")
-st.caption(f"✅ 修復縮排錯誤 | 安全匯出模式 | 當前鎖定: {selected_dim_color}")
+st.title("🏗️ AI 工程算量平台 (v14.0 邏輯修正版)")
+st.caption(f"✅ 修復縮排錯誤 | 支援紅/綠多區塊計算 | 當前模型: {model_option}")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -136,40 +112,43 @@ with col_data:
             
             try:
                 model = genai.GenerativeModel(model_option)
-                st.toast(f"正在鎖定 {selected_dim_color} 色層進行分析...")
+                st.toast(f"正在分析多區塊 (Green/Red) 與尺寸邏輯...")
                 
+                # --- v14.0 Prompt: 多重邏輯修正 ---
                 dim_instruction = ""
                 if "面積" in calc_mode:
                     dim_instruction = f"""
-                    1. **STRICT COLOR RULE**: 
-                       - ONLY look for numbers and dimension lines in **{selected_dim_color}** color.
-                       - Ignore numbers in other colors.
-                    2. **Unit Conversion**: Dimensions are in mm. Convert to meters.
-                    3. **Geometry Logic**:
-                       - **Irregular/Chamfered Shapes**: Use the dimension lines ({selected_dim_color}) to calculate the Net Area.
-                       - **Trapezoids**: (Top + Bottom)/2 * Height.
-                       - **Output**: Set 'dim1' = Net Area (m²), Set 'dim2' = 1.
-                       - **Note**: Write the formula you used.
+                    1. **Target Identification**: 
+                       - Identify ALL closed shapes drawn in **GREEN** OR **RED**.
+                       - The **RED box** on the right is a separate room/area. DO NOT ignore it.
+                       
+                    2. **Dimension Logic (CRITICAL)**:
+                       - Dimensions are in **{dim_color}**.
+                       - Units are mm. Convert to meters (e.g., 1600 -> 1.6).
+                       - **Association Rule**: Only use dimensions that physically span the length/width of the specific block.
+                       - **Rightmost Block (Red)**: Its width is likely 1600. Look carefully for its Height. If a vertical dimension (like 3375) spans a larger range, DO NOT use it directly as the height of the Red box unless it matches. If height is missing, note it.
+                       - **Bottom Green Block**: It has a chamfer (slanted corner). Use Trapezoid logic: ((Top_W + Bottom_W)/2) * H.
+                       
+                    3. **Output Format**:
+                       - Return a JSON list.
+                       - Keys: "item" (Name/Location), "dim1" (Length/Net Area), "dim2" (Width/1), "note" (FORMULA used).
+                       - **IMPORTANT**: In the 'note', strictly write the math you did. Example: "1.6 * 2.5 (estimated)" or "Trapezoid: ((2.545+2.175)/2)*0.73".
                     """
                 elif "周長" in calc_mode or "牆面" in calc_mode:
                     dim_instruction = f"""
-                    1. Trace the boundary lines.
-                    2. Use the **{selected_dim_color}** numbers to determine lengths.
-                    3. Sum all segments.
-                    4. Set 'dim1' = Total Perimeter (m), 'dim2' = 0.
+                    1. Trace all GREEN and RED boundaries.
+                    2. Sum segments to get Perimeter.
+                    3. Set 'dim1' = Total Perimeter (m), 'dim2' = 0.
                     """
 
                 prompt = f"""
                 You are a Senior Quantity Surveyor. Analyze this image.
-                
-                USER DEFINED RULES:
-                - Dimension Color: **{selected_dim_color}** (Primary Source of Truth for lengths)
-                - Other Rules: {user_definition}
+                User Rules: {user_definition}
                 
                 TASK:
                 {dim_instruction}
                 
-                Return ONLY a JSON list (no markdown) with keys: "item", "dim1", "dim2", "note".
+                Return ONLY a JSON list (no markdown).
                 """
                 
                 response = model.generate_content([prompt, image])
@@ -191,10 +170,10 @@ with col_data:
         edited_df = st.data_editor(
             st.session_state.ai_data,
             column_config={
-                "item": "項目",
-                "dim1": st.column_config.NumberColumn("長度/面積 (m/m²)", format="%.3f"),
+                "item": "項目/位置",
+                "dim1": st.column_config.NumberColumn("長度/面積 (m)", format="%.3f"),
                 "dim2": st.column_config.NumberColumn("寬度/系數", format="%.3f"),
-                "note": "AI 計算說明"
+                "note": "AI 計算式 (請核對)"
             },
             num_rows="dynamic",
             use_container_width=True
@@ -237,11 +216,11 @@ with col_data:
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
         st.dataframe(result_df, use_container_width=True)
         
-        # --- [v13.6 穩定匯出模組] ---
+        # --- [v14.0 穩定匯出模組] ---
         if not result_df.empty:
             st.subheader("4. 匯出選項")
             
-            # 使用 if-else 結構，確保縮排正確
+            # 使用正確縮排的 if-else 結構
             if HAS_OPENPYXL:
                 # 方案 A: 有 Excel 引擎
                 output = io.BytesIO()
@@ -256,7 +235,7 @@ with col_data:
                     type="primary"
                 )
             else:
-                # 方案 B: 沒有 Excel 引擎 (您目前的情況)
+                # 方案 B: 沒有 Excel 引擎 (Fallback)
                 st.warning("⚠️ 系統偵測到環境缺少 'openpyxl'，已自動切換為 CSV 格式 (可用 Excel 開啟)。")
                 csv_data = result_df.to_csv(index=False).encode('utf-8-sig')
                 
