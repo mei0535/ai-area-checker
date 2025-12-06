@@ -14,7 +14,7 @@ except ImportError:
     HAS_OPENPYXL = False
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v14.0 雙色邏輯修正版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v14.1 結構拆解版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -37,7 +37,7 @@ with st.sidebar:
     
     st.header("🤖 選擇模型")
     model_option = st.selectbox(
-        "建議使用 Pro 版本以處理多色邏輯",
+        "建議使用 Pro 版本以執行空間拆解",
         [
             "models/gemini-2.5-pro",       # 推薦：邏輯最強
             "models/gemini-2.0-flash",     # 速度快
@@ -50,22 +50,14 @@ with st.sidebar:
     
     st.header("🎨 定義規則")
     
-    # v14.0: 明確定義多色層邏輯
     st.subheader("1. 辨識目標顏色")
-    st.info("已啟用多色層模式：同時搜尋綠色與紅色區塊")
+    st.info("系統將搜尋綠色 (Green) 與紅色 (Red) 區域")
     
-    # 這裡雖然是文字顯示，但在 Prompt 會動態生成指令
-    dim_color_ui = st.selectbox(
-        "尺寸線顏色",
-        ["Magenta/Purple (紫色)", "Red (紅色)", "Blue (藍色)"],
-        index=0
-    )
-
     st.subheader("2. 空間/其他定義")
     user_definition = st.text_area(
         "補充說明", 
-        value="1. 右側紅色矩形 (Red Box) 必須獨立計算。\n2. 下方綠色區塊 (Green Trapezoid) 有斜角，需扣除或用梯形公式。\n3. 注意區分紅色與綠色區塊的高度，不要混用。",
-        height=120
+        value="1. 將綠色區域拆解為：頂部(Top)、中間(Middle)、底部(Bottom)。\n2. 紅色區域(Red Box)獨立計算。\n3. 注意下方綠色區塊有斜角(Chamfer)。",
+        height=100
     )
     
     calc_mode = st.radio(
@@ -78,8 +70,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v14.0 雙色邏輯修正版)")
-st.caption(f"✅ 修復紅色漏項 | 修正右側區塊誤算 | 算式透明化 | 當前模型: {model_option}")
+st.title("🏗️ AI 工程算量平台 (v14.1 結構拆解版)")
+st.caption(f"✅ 強制分區掃描 (Top/Mid/Bot/Right) | 修正連通域誤判 | 當前模型: {model_option}")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -116,41 +108,39 @@ with col_data:
             
             try:
                 model = genai.GenerativeModel(model_option)
-                st.toast(f"正在執行 v14.0 雙色層分析...")
+                st.toast(f"正在執行 v14.1 結構拆解分析...")
                 
-                # --- v14.0 Prompt: 多重邏輯修正 ---
+                # --- v14.1 Prompt: 強制拆解邏輯 ---
                 dim_instruction = ""
                 if "面積" in calc_mode:
                     dim_instruction = f"""
-                    1. **Scope definition (Target Colors)**: 
-                       - Identify closed shapes drawn in **GREEN** lines.
-                       - Identify closed shapes drawn in **RED** lines.
-                       - **CRITICAL**: The RED box on the right is a SEPARATE room. It must be listed as a separate item.
+                    1. **DECOMPOSITION STRATEGY (CRITICAL)**: 
+                       - The Green lines look connected, but they form THREE distinct zones. DO NOT calculate as one big shape.
+                       - **Zone A (Top Green)**: Look for dimensions 1100, 650, 675, 2425. It's an L-shape or rectangle cluster.
+                       - **Zone B (Middle Green)**: The vertical connecting corridor.
+                       - **Zone C (Bottom Green)**: The shape with width 2175/2545 and height 730. Note the SLANTED corner (Trapezoid).
+                       - **Zone D (Right Red)**: The separate RED box (width ~1600).
                        
-                    2. **Dimension Logic (Association)**:
-                       - Dimensions are likely in Magenta/Purple.
-                       - Units are mm. Convert to meters (e.g., 1600 -> 1.6).
-                       - **Right Red Box**: Look for width ~1600. Look for its specific height. DO NOT use the total height (3375) if it extends beyond the red box.
-                       - **Bottom Green Shape**: It has a chamfer (slanted corner). Use Trapezoid logic: ((Top_W + Bottom_W)/2) * H.
+                    2. **Dimension Logic**:
+                       - Units are mm. Convert to meters (e.g., 2545 -> 2.545).
+                       - **Zone C (Trapezoid)**: Use formula ((Top+Bottom)/2)*Height -> ((2.545+2.175)/2)*0.73.
+                       - **Zone D (Red Box)**: Width is ~1.6m. Estimate Height based on grid if not explicitly labeled (likely aligns with adjacent elements).
                        
-                    3. **Formula Transparency**:
-                       - You MUST explicit write the math in the "note" field.
-                       - Example: "1.6 * 2.4" or "Trapezoid: ((2.545+2.175)/2)*0.73".
-                       - If you cannot find a specific dimension, assume logically based on adjacent lines and mark as "(est)" in note.
-                       
-                    4. **Output Format**:
-                       - Return a JSON list with keys: "item", "dim1", "dim2", "note".
+                    3. **Output Requirements**:
+                       - You MUST return at least 3-4 separate items.
+                       - JSON keys: "zone_hint" (e.g., Top, Bottom, RedBox), "item", "dim1", "dim2", "note".
                        - 'dim1' = Net Area (m²). 'dim2' = 1.
+                       - In 'note', show the formula used (e.g., "1.1*0.8 + 0.65*0.45").
                     """
                 elif "周長" in calc_mode or "牆面" in calc_mode:
                     dim_instruction = f"""
-                    1. Trace all GREEN and RED boundaries.
-                    2. Sum segments to get Perimeter.
-                    3. Set 'dim1' = Total Perimeter (m), 'dim2' = 0.
+                    1. Trace boundaries of Top Green, Bottom Green, and Red Box separately.
+                    2. Sum segments.
+                    3. Set 'dim1' = Perimeter (m), 'dim2' = 0.
                     """
 
                 prompt = f"""
-                You are a Senior Quantity Surveyor. Analyze this image.
+                You are a Senior Quantity Surveyor. Analyze this image using the Decomposition Strategy.
                 User Rules: {user_definition}
                 
                 TASK:
@@ -165,7 +155,7 @@ with col_data:
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success(f"✅ 辨識完成 (已分離紅/綠區塊)")
+                    st.success(f"✅ 辨識完成 (已拆解為多個區域)")
                 except:
                     st.error("AI 回傳格式無法解析")
                     st.write("Raw output:", response.text)
@@ -178,7 +168,8 @@ with col_data:
         edited_df = st.data_editor(
             st.session_state.ai_data,
             column_config={
-                "item": "項目/位置",
+                "zone_hint": "區域 (Zone)",
+                "item": "項目說明",
                 "dim1": st.column_config.NumberColumn("長度/面積 (m)", format="%.3f"),
                 "dim2": st.column_config.NumberColumn("寬度/系數", format="%.3f"),
                 "note": "AI 計算式 (請核對)"
@@ -208,6 +199,7 @@ with col_data:
                 unit = "m²"
             
             results.append({
+                "區域": row.get("zone_hint", ""),
                 "項目": row.get("item", ""),
                 "計算式": f"{d1}*{d2}" if "面積" in calc_mode else f"{d1}",
                 "小計": round(val, 2),
@@ -224,13 +216,11 @@ with col_data:
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
         st.dataframe(result_df, use_container_width=True)
         
-        # --- [v14.0 穩定匯出模組] ---
+        # --- [v14.1 穩定匯出模組] ---
         if not result_df.empty:
             st.subheader("4. 匯出選項")
             
-            # 使用正確縮排的 if-else 結構，確保 Python 語法正確
             if HAS_OPENPYXL:
-                # 方案 A: 有 Excel 引擎
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     result_df.to_excel(writer, index=False, sheet_name='算量明細')
@@ -243,8 +233,7 @@ with col_data:
                     type="primary"
                 )
             else:
-                # 方案 B: 沒有 Excel 引擎 (Fallback)
-                st.warning("⚠️ 系統偵測到環境缺少 'openpyxl'，已自動切換為 CSV 格式 (可用 Excel 開啟)。")
+                st.warning("⚠️ 系統偵測到環境缺少 'openpyxl'，已自動切換為 CSV 格式。")
                 csv_data = result_df.to_csv(index=False).encode('utf-8-sig')
                 
                 st.download_button(
