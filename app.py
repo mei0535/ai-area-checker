@@ -4,10 +4,17 @@ from PIL import Image
 import pandas as pd
 import json
 import fitz  # PyMuPDF
-import io    # 新增：用於處理二進制流 (Excel 匯出)
+import io    # 處理資料流
+
+# --- [防呆機制] 檢測 Excel 引擎是否存在 ---
+try:
+    import openpyxl
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v13.4 Excel 匯出版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v13.5 穩定匯出版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -32,9 +39,9 @@ with st.sidebar:
     model_option = st.selectbox(
         "建議使用 Pro 版本以精準識別顏色",
         [
-            "models/gemini-2.5-pro",       # 推薦：顏色與幾何邏輯最強
-            "models/gemini-2.5-flash",     # 速度快
-            "models/gemini-2.0-flash",     # 備用
+            "models/gemini-2.5-pro",       # 推薦
+            "models/gemini-2.5-flash",     
+            "models/gemini-2.0-flash",     
             "models/gemini-1.5-pro"
         ],
         index=0 
@@ -46,7 +53,6 @@ with st.sidebar:
     
     # 尺寸顏色選擇器
     st.subheader("1. 尺寸標註顏色")
-    st.caption("請指定圖面上「尺寸線/數字」的顏色：")
     dim_color_ui = st.selectbox(
         "選擇顏色 (Dimension Color)",
         [
@@ -56,13 +62,12 @@ with st.sidebar:
             "Green (綠)", 
             "Cyan (青)", 
             "Blue (藍)", 
-            "White/Black (白/黑)",
+            "White/Black (白/黑)", 
             "Orange (橘)"
         ],
         index=0 
     )
     
-    # 顏色映射字典
     color_map = {
         "Magenta (紫紅/洋紅)": "Magenta/Purple",
         "Red (紅)": "Red",
@@ -77,7 +82,7 @@ with st.sidebar:
 
     st.subheader("2. 空間/其他定義")
     user_definition = st.text_area(
-        "補充說明 (例如：綠色線是牆心...)", 
+        "補充說明", 
         value="例如：綠色線 (Green Lines) 是房間邊界範圍",
         height=100
     )
@@ -92,8 +97,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v13.4 Excel 匯出版)")
-st.caption(f"✅ 已鎖定尺寸顏色: {selected_dim_color} | 支援 .xlsx 匯出 | 模型: {model_option}")
+st.title("🏗️ AI 工程算量平台 (v13.5 穩定匯出版)")
+st.caption(f"✅ 計算邏輯正確 | 尺寸鎖定: {selected_dim_color} | 匯出引擎自動偵測")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -132,14 +137,13 @@ with col_data:
                 model = genai.GenerativeModel(model_option)
                 st.toast(f"正在鎖定 {selected_dim_color} 色層進行分析...")
                 
-                # Prompt 邏輯
                 dim_instruction = ""
                 if "面積" in calc_mode:
                     dim_instruction = f"""
                     1. **STRICT COLOR RULE**: 
                        - ONLY look for numbers and dimension lines in **{selected_dim_color}** color.
                        - Ignore numbers in other colors.
-                    2. **Unit Conversion**: Dimensions are in mm. Convert to meters (e.g., 2545 -> 2.545).
+                    2. **Unit Conversion**: Dimensions are in mm. Convert to meters.
                     3. **Geometry Logic**:
                        - **Irregular/Chamfered Shapes**: Use the dimension lines ({selected_dim_color}) to calculate the Net Area.
                        - **Trapezoids**: (Top + Bottom)/2 * Height.
@@ -148,8 +152,8 @@ with col_data:
                     """
                 elif "周長" in calc_mode or "牆面" in calc_mode:
                     dim_instruction = f"""
-                    1. Trace the boundary lines (defined in user rules).
-                    2. Use the **{selected_dim_color}** numbers to determine segment lengths.
+                    1. Trace the boundary lines.
+                    2. Use the **{selected_dim_color}** numbers to determine lengths.
                     3. Sum all segments.
                     4. Set 'dim1' = Total Perimeter (m), 'dim2' = 0.
                     """
@@ -165,7 +169,6 @@ with col_data:
                 {dim_instruction}
                 
                 Return ONLY a JSON list (no markdown) with keys: "item", "dim1", "dim2", "note".
-                Example: [{{"item": "Room A", "dim1": 1.722, "dim2": 1.0, "note": "Trapezoid calc using {selected_dim_color} dims"}}]
                 """
                 
                 response = model.generate_content([prompt, image])
@@ -174,14 +177,13 @@ with col_data:
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success(f"✅ 辨識完成 (已過濾 {selected_dim_color} 尺寸)")
+                    st.success(f"✅ 辨識完成")
                 except:
-                    st.error("AI 回傳格式無法解析，請重試或更換模型。")
+                    st.error("AI 回傳格式無法解析")
                     st.write("Raw output:", response.text)
                 
             except Exception as e:
-                st.error(f"❌ 連線失敗")
-                st.error(str(e))
+                st.error(f"❌ 連線失敗: {e}")
 
     # --- Data Editor & Calculation ---
     if st.session_state.ai_data is not None:
@@ -219,7 +221,7 @@ with col_data:
             
             results.append({
                 "項目": row.get("item", ""),
-                "計算式": f"{d1} * {d2}" if "面積" in calc_mode else (f"{d1} * {wall_height}" if "牆面" in calc_mode else f"{d1}"),
+                "計算式": f"{d1}*{d2}" if "面積" in calc_mode else f"{d1}",
                 "小計": round(val, 2),
                 "單位": unit,
                 "備註": row.get("note", "")
@@ -229,27 +231,12 @@ with col_data:
         st.divider()
         st.subheader("3. 最終計算書")
         
-        # 顯示總計
         total_val = result_df["小計"].sum()
         first_unit = result_df['單位'].iloc[0] if not result_df.empty else ""
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
-        
-        # 顯示表格
         st.dataframe(result_df, use_container_width=True)
         
-        # --- [新增] Excel 匯出功能 ---
+        # --- [v13.5 智慧匯出模組] ---
         if not result_df.empty:
-            # 建立 Excel Buffer
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                result_df.to_excel(writer, index=False, sheet_name='工程算量')
-                # 這裡可以加入更多 Sheet，例如原始數據等
-            
-            excel_data = output.getvalue()
-            
-            st.download_button(
-                label="📥 下載 Excel 計算書",
-                data=excel_data,
-                file_name="AI_Quantity_Takeoff.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            if HAS_OPENPYXL:
+                # 方案 A: 系統有安裝 openpyxl，提供
