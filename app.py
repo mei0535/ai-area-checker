@@ -4,9 +4,10 @@ from PIL import Image
 import pandas as pd
 import json
 import fitz  # PyMuPDF
+import time
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (智能偵測版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (暴力通關版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄 ---
 with st.sidebar:
@@ -36,8 +37,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (PDF/智能偵測版)")
-st.caption("v7.0 Ultra: 自動偵測可用模型，解決 404 錯誤")
+st.title("🏗️ AI 工程算量平台 (Web 修復版)")
+st.caption("v8.0: 自動切換模型，解決 404 錯誤")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -59,7 +60,7 @@ with col_img:
                     st.success(f"已讀取 PDF 第一頁 (共 {len(doc)} 頁)")
             else:
                 image = Image.open(uploaded_file)
-            st.image(image, caption=f"預覽：{uploaded_file.name}", use_container_width=True)
+            st.image(image, caption=f"預覽：{uploaded_file.name}", use_column_width=True)
         except Exception as e:
             st.error(f"檔案讀取失敗：{e}")
 
@@ -71,72 +72,82 @@ with col_data:
 
     if image and api_key:
         if st.button("🚀 執行 AI 辨識", type="primary"):
-            try:
-                genai.configure(api_key=api_key)
-                
-                # --- 【關鍵修正】自動偵測模型 (不再寫死名稱) ---
-                target_model_name = "gemini-1.5-flash" # 預設值
+            
+            genai.configure(api_key=api_key)
+            
+            # --- 核心修正：輪流嘗試不同的模型名稱 ---
+            candidate_models = [
+                'gemini-1.5-flash',      # 首選：最新快版
+                'gemini-1.5-flash-001',  # 備選：特定版本
+                'gemini-pro',            # 保底：舊版穩定款
+                'gemini-1.5-pro'         # 最後手段：強力版
+            ]
+            
+            success_model = None
+            response = None
+            error_log = []
+
+            # 迴圈嘗試連線
+            with st.spinner("正在尋找可用的 AI 模型..."):
+                for model_name in candidate_models:
+                    try:
+                        # 測試連線
+                        model = genai.GenerativeModel(model_name)
+                        
+                        # 準備 Prompt
+                        dim_instruction = ""
+                        if "面積" in calc_mode:
+                            dim_instruction = "請分別抓取該區域的「長度 (Length)」與「寬度 (Width)」。"
+                        elif "周長" in calc_mode or "牆面" in calc_mode:
+                            dim_instruction = "請抓取該範圍所有邊長的總和做為「長度 (dim1)」，寬度填 0。"
+
+                        prompt = f"""
+                        你是一位專業的建築估算師。請分析這張圖。
+                        【任務目標】：
+                        1. 找到符合使用者描述："{user_definition}" 的線段或區域。
+                        2. 讀取該區域的尺寸標註數字。
+                        
+                        【重要規則】：
+                        - **單位換算**：圖紙數字若為 mm (如 3500)，請除以 1000 換算為 m (如 3.5)。
+                        - **排除干擾**：忽略標高(FL)、編號、圖號。只抓尺寸。
+                        - {dim_instruction}
+                        
+                        請輸出純 JSON 格式 (無 markdown)：
+                        [
+                            {{
+                                "item": "項目名稱",
+                                "dim1": 數字(長度/周長, m),
+                                "dim2": 數字(寬度, m, 若無0),
+                                "note": "備註"
+                            }}
+                        ]
+                        """
+                        
+                        # 嘗試發送 (如果這裡沒報錯，就是成功了)
+                        response = model.generate_content([prompt, image])
+                        success_model = model_name
+                        break # 成功了！跳出迴圈
+                        
+                    except Exception as e:
+                        error_log.append(f"{model_name} 失敗: {str(e)}")
+                        continue # 失敗了，試下一個
+
+            # --- 處理結果 ---
+            if success_model and response:
+                st.toast(f"✅ 成功！使用模型：{success_model}")
                 try:
-                    # 問 API：我有什麼模型可以用？
-                    available_models = [m.name for m in genai.list_models()]
-                    
-                    # 優先找 1.5-flash
-                    for m in available_models:
-                        if "gemini-1.5-flash" in m:
-                            target_model_name = m
-                            break
-                    else:
-                        # 找不到就找 pro-vision
-                        for m in available_models:
-                             if "gemini-pro-vision" in m:
-                                 target_model_name = m
-                                 break
-                except:
-                    pass # 如果偵測失敗，就用預設值賭賭看
-
-                model = genai.GenerativeModel(target_model_name)
-                st.toast(f"連線成功！使用模型：{target_model_name}")
-
-                with st.spinner("AI 正在解讀圖面資訊..."):
-                    
-                    dim_instruction = ""
-                    if "面積" in calc_mode:
-                        dim_instruction = "請分別抓取該區域的「長度 (Length)」與「寬度 (Width)」。"
-                    elif "周長" in calc_mode or "牆面" in calc_mode:
-                        dim_instruction = "請抓取該範圍所有邊長的總和做為「長度 (dim1)」，寬度填 0。"
-
-                    prompt = f"""
-                    你是一位專業的建築估算師。請分析這張圖。
-                    
-                    【任務目標】：
-                    1. 找到符合使用者描述："{user_definition}" 的線段或區域。
-                    2. 讀取該區域的尺寸標註數字。
-                    
-                    【重要規則】：
-                    - **單位換算**：圖紙數字若為 mm (如 3500)，請除以 1000 換算為 m (如 3.5)。
-                    - **排除干擾**：忽略標高(FL)、編號、圖號。只抓尺寸。
-                    - {dim_instruction}
-                    
-                    請輸出純 JSON 格式 (無 markdown)：
-                    [
-                        {{
-                            "item": "項目名稱",
-                            "dim1": 數字(長度/周長, m),
-                            "dim2": 數字(寬度, m, 若無0),
-                            "note": "備註"
-                        }}
-                    ]
-                    """
-                    
-                    response = model.generate_content([prompt, image])
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success("✅ 辨識完成！")
-                    
-            except Exception as e:
-                st.error(f"AI 發生錯誤：{e}")
-                st.info("若持續失敗，可能是 API Key 權限問題，請檢查 Google Cloud Console 設定。")
+                    st.success("辨識完成！請檢查下方數據。")
+                except:
+                    st.error("AI 回傳了非 JSON 格式，請再試一次。")
+            else:
+                st.error("❌ 所有模型都嘗試失敗。")
+                with st.expander("查看錯誤日誌 (給工程師看)"):
+                    for log in error_log:
+                        st.write(log)
+                st.info("建議：請檢查 API Key 是否正確，或稍後再試。")
 
     # --- Data Editor ---
     if st.session_state.ai_data is not None:
