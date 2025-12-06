@@ -6,7 +6,8 @@ import json
 import fitz  # PyMuPDF
 import io    # 處理資料流
 
-# --- [防呆機制] 檢測 Excel 引擎是否存在 ---
+# --- [防呆機制] 檢測 Excel 引擎 ---
+# 為了防止環境沒有安裝 openpyxl 導致崩潰，我們先做檢測
 try:
     import openpyxl
     HAS_OPENPYXL = True
@@ -14,7 +15,7 @@ except ImportError:
     HAS_OPENPYXL = False
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (v13.5 穩定匯出版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v13.6 修復版)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄設定 ---
 with st.sidebar:
@@ -97,8 +98,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (v13.5 穩定匯出版)")
-st.caption(f"✅ 計算邏輯正確 | 尺寸鎖定: {selected_dim_color} | 匯出引擎自動偵測")
+st.title("🏗️ AI 工程算量平台 (v13.6 修復版)")
+st.caption(f"✅ 修復縮排錯誤 | 安全匯出模式 | 當前鎖定: {selected_dim_color}")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -236,7 +237,33 @@ with col_data:
         st.metric("總數量", f"{total_val:,.2f} {first_unit}")
         st.dataframe(result_df, use_container_width=True)
         
-        # --- [v13.5 智慧匯出模組] ---
+        # --- [v13.6 穩定匯出模組] ---
         if not result_df.empty:
+            st.subheader("4. 匯出選項")
+            
+            # 使用 if-else 結構，確保縮排正確
             if HAS_OPENPYXL:
-                # 方案 A: 系統有安裝 openpyxl，提供
+                # 方案 A: 有 Excel 引擎
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    result_df.to_excel(writer, index=False, sheet_name='算量明細')
+                
+                st.download_button(
+                    label="📥 下載 Excel 報表 (.xlsx)",
+                    data=output.getvalue(),
+                    file_name="AI_Quantity_Takeoff.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+            else:
+                # 方案 B: 沒有 Excel 引擎 (您目前的情況)
+                st.warning("⚠️ 系統偵測到環境缺少 'openpyxl'，已自動切換為 CSV 格式 (可用 Excel 開啟)。")
+                csv_data = result_df.to_csv(index=False).encode('utf-8-sig')
+                
+                st.download_button(
+                    label="📥 下載 CSV 報表 (.csv)",
+                    data=csv_data,
+                    file_name="AI_Quantity_Takeoff.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
