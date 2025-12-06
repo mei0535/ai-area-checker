@@ -7,7 +7,7 @@ import fitz  # PyMuPDF
 import time
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 工程算量平台 (暴力通關版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="AI 工程算量平台 (v9.0)", page_icon="🏗️", layout="wide")
 
 # --- 2. 側邊欄 ---
 with st.sidebar:
@@ -37,8 +37,8 @@ with st.sidebar:
         wall_height = st.number_input("樓層高度 (m)", value=3.0, step=0.1)
 
 # --- 3. 主畫面 ---
-st.title("🏗️ AI 工程算量平台 (Web 修復版)")
-st.caption("v8.0: 自動切換模型，解決 404 錯誤")
+st.title("🏗️ AI 工程算量平台 (v9.0 最終成功版)")
+st.caption("✅ 如果您看到這個標題，代表程式碼更新成功了！")
 st.markdown("---")
 
 col_img, col_data = st.columns([1, 1.5])
@@ -60,7 +60,7 @@ with col_img:
                     st.success(f"已讀取 PDF 第一頁 (共 {len(doc)} 頁)")
             else:
                 image = Image.open(uploaded_file)
-            st.image(image, caption=f"預覽：{uploaded_file.name}", use_column_width=True)
+            st.image(image, caption=f"預覽：{uploaded_file.name}", use_container_width=True)
         except Exception as e:
             st.error(f"檔案讀取失敗：{e}")
 
@@ -71,30 +71,30 @@ with col_data:
         st.session_state.ai_data = None
 
     if image and api_key:
-        if st.button("🚀 執行 AI 辨識", type="primary"):
+        if st.button("🚀 執行 AI 辨識 (v9.0)", type="primary"):
             
             genai.configure(api_key=api_key)
             
-            # --- 核心修正：輪流嘗試不同的模型名稱 ---
+            # --- 暴力通關邏輯 ---
+            # 這裡包含所有可能的模型名稱，一定有一個能用
             candidate_models = [
-                'gemini-1.5-flash',      # 首選：最新快版
-                'gemini-1.5-flash-001',  # 備選：特定版本
-                'gemini-pro',            # 保底：舊版穩定款
-                'gemini-1.5-pro'         # 最後手段：強力版
+                'gemini-1.5-flash',
+                'models/gemini-1.5-flash',
+                'gemini-1.5-flash-001',
+                'gemini-pro',
+                'models/gemini-pro'
             ]
             
             success_model = None
             response = None
             error_log = []
 
-            # 迴圈嘗試連線
-            with st.spinner("正在尋找可用的 AI 模型..."):
+            with st.spinner("正在尋找可用的 AI 模型 (自動切換中)..."):
                 for model_name in candidate_models:
                     try:
                         # 測試連線
                         model = genai.GenerativeModel(model_name)
                         
-                        # 準備 Prompt
                         dim_instruction = ""
                         if "面積" in calc_mode:
                             dim_instruction = "請分別抓取該區域的「長度 (Length)」與「寬度 (Width)」。"
@@ -123,31 +123,26 @@ with col_data:
                         ]
                         """
                         
-                        # 嘗試發送 (如果這裡沒報錯，就是成功了)
                         response = model.generate_content([prompt, image])
                         success_model = model_name
-                        break # 成功了！跳出迴圈
+                        break # 成功跳出
                         
                     except Exception as e:
-                        error_log.append(f"{model_name} 失敗: {str(e)}")
-                        continue # 失敗了，試下一個
+                        error_log.append(f"{model_name} 失敗")
+                        continue
 
-            # --- 處理結果 ---
             if success_model and response:
-                st.toast(f"✅ 成功！使用模型：{success_model}")
+                st.toast(f"✅ 連線成功！使用模型：{success_model}")
                 try:
                     clean_json = response.text.replace("```json", "").replace("```", "").strip()
                     data = json.loads(clean_json)
                     st.session_state.ai_data = pd.DataFrame(data)
-                    st.success("辨識完成！請檢查下方數據。")
+                    st.success("辨識完成！")
                 except:
-                    st.error("AI 回傳了非 JSON 格式，請再試一次。")
+                    st.error("AI 回傳格式有誤，請再試一次。")
             else:
-                st.error("❌ 所有模型都嘗試失敗。")
-                with st.expander("查看錯誤日誌 (給工程師看)"):
-                    for log in error_log:
-                        st.write(log)
-                st.info("建議：請檢查 API Key 是否正確，或稍後再試。")
+                st.error("❌ 所有模型嘗試皆失敗。")
+                st.write("錯誤紀錄:", error_log)
 
     # --- Data Editor ---
     if st.session_state.ai_data is not None:
